@@ -1,0 +1,14 @@
+# Normalize every text file to LF on checkout and in the repository,
+# regardless of the checking-out machine's OS or its core.autocrlf setting.
+#
+# Why: self-hosted GitHub Actions runners (ECS Fargate, Linux containers)
+# build Docker images from this checkout. A shell script or Dockerfile
+# checked out with CRLF breaks under Linux (e.g. "env: bash\r: No such
+# file or directory") even though the same file works fine on Windows.
+* text=auto eol=lf
+
+# Called out explicitly since these are the files Docker/Linux tooling
+# actually executes — the blanket rule above already covers them, this
+# just documents the intent.
+*.sh       text eol=lf
+Dockerfile text eol=lf

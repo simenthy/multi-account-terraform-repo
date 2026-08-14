@@ -1,0 +1,33 @@
+# Terraform provider binaries/cache — hundreds of MB, never commit.
+# NOTE: .terraform.lock.hcl is a different file and IS committed (see below).
+**/.terraform/
+
+# Local/CLI plan output — may contain unredacted sensitive values.
+*.tfplan
+tfplan
+tfplan.binary
+tfplan.json
+tfplan.txt
+crash.log
+crash.*.log
+
+# Local state, in case anyone ever runs a local backend by accident.
+# The real state lives in S3 — do not read or commit it.
+*.tfstate
+*.tfstate.*
+
+# Never commit a temporary provider override (used only for offline/dry-run
+# plans against stubbed credentials — see step 4's "testing locally" note).
+override.tf
+override_*.tf
+*_override.tf
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+
+*.txt
+devops-access-key.txt
+nft-access-key.txt
+backend_buckets.tf
