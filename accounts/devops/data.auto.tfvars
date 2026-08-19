@@ -141,7 +141,7 @@ backup_plans = {
 # suffix with the devops account ID before the first apply.
 s3_buckets = {
   devops_bucket01 = {
-    bucket = "star-alliance-terraform-devops-REPLACE_ME_ACCOUNT_ID"
+    bucket = "star-alliance-terraform-devops-882862137128"
     tags = {
       Name        = "star-alliance-terraform-devops"
       Environment = "devops"

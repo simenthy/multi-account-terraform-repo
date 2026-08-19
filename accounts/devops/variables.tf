@@ -257,7 +257,7 @@ variable "launch_templates" {
   description = "Map of launch templates, keyed by local name. security_group_keys -> networking SGs; iam_instance_profile_key -> IAM instance profile."
   type = map(object({
     name                    = string
-    image_id                = optional(string)
+    image_id                = string
     instance_type           = optional(string)
     key_name                = optional(string)
     description             = optional(string)

@@ -116,7 +116,7 @@ module "observability" {
 }
 
 module "pipeline" {
-  source      = "../../../modules/pipeline"
+  source      = "../../modules/pipeline"
   common_tags = var.common_tags
 
   github_oidc_provider       = var.github_oidc_provider
