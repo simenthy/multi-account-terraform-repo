@@ -1,0 +1,201 @@
+name: terraform-plan (accounts/*)
+
+#===========TRIGERRS===========
+
+on:
+    pull_request:
+        branches: [main]
+        paths:
+            - 'accounts/*'
+            - 'modules/*'
+            - 'policy/*'
+            - '.github/workflows/terraform-plan.yml'   # Editing the workflow should re-run it on the PR so you can see your edit work. Re-planning on every workflow-file merge adds no information
+    
+    push:
+        branches: [main]
+        paths:
+            - 'accounts/*'
+            - 'modules/*'
+            - 'policy/*'
+
+#===========PERMISSIONS===========
+
+permissions:
+    id-token: write         # Allows requesting the OIDC JWT
+    contents: read          # Allows actions/checkout to read the repository.
+
+#==========CONCURRENCY===========
+
+concurrency:
+    group: terraform-plan-${{github.ref}}       # github.ref identifies the branch or PR, so each PR gets its own group
+    cancel-in-progress: true                    # Pushing a fix to a PR cancels that PR's in-flight plan and starts a fresh one
+
+#==========GLOBAL ENVIRONMENT VARIABLES===========
+
+env:
+    TERRAFORM_VERSION: "1.15.8"
+    CONFTEST_VERSION: "0.69.0"
+    AWS_REGION: "us-east-1"
+    TF_IN_AUTOMATION: "true"   # Prevents Terraform from prompting for input when running in automation
+    TF_INPUT: "false"          # Without it, a missing variable makes Terraform wait for input that will never come
+
+#==========JOBS===========
+
+jobs:
+    #-----------DETECT AFFECTED ACCOUNTS-----------
+    detect:
+        name: detect affected accounts
+        runs-on: ubuntu-latest
+
+        outputs:
+            accounts: ${{ steps.detect.outputs.accounts}}
+            any: ${{ steps.detect.outputs.any }}            # Republish two step outputs as job outputs so the plan job can read them via needs.detect.outputs.*
+        
+        steps:
+            - name: checkout
+              uses: actions/checkout@v4
+              with:
+                fetch-depth: 0   # Fetch all history for all branches and tags so we can detect changes in any file
+            
+            - name: Detect changed account/<name> - root
+              id: detect                                    # Step ID is used to reference outputs from this step in later steps
+              run: |                                              
+                set -euo pipefail                           # Exit on error(e), undefined variable(u), or failed pipe(o)
+
+                # Setting base and head commit SHAs based on the event type (pull_request or push)
+                # -------------------------------------------------------------
+
+                if [ "${{ github.event_name }}" = "pull_request" ]; then    # if event trigger is a pull_request, then
+                    base = ${{github.event.pull_request.base.sha}}          # set base to the commit SHA of the base branch of the PR
+                    head = ${{github.event.pull_request.head.sha}}          # set head to the commit SHA of the head branch of the PR
+                else                                                        # if it is a push event, then
+                    base = ${{github.event.before.sha}}                     # set base to the commit SHA of the previous commit on the branch
+                    head = ${{github.sha}}                                  # set head to the commit SHA of the current commit on the branch
+                fi
+
+                # If base is empty or not a valid commit SHA, fall back to the commit right before head
+                # ----------------------------------------------------------
+
+                if [ -z "$base" ] || ! git cat-file -e "$base" 2>/dev/null; then    # -z "$base" means if base is empty, and ! git cat-file -e "$base" means if base is not a valid commit SHA, 2>/dev/null means Hide git's error message; the exit code is what's being tested
+                    base="${head}~1"	                                            # Fall back to "the commit right before head."
+                fi
+
+                # Get the diff using the base and head commit SHAs, and extract the account names from the changed files
+                # ----------------------------------------------------------
+                
+                changed=$(git diff --name-only "$base" "$head")
+                echo "Changed files (${base}..${head}):"
+                echo "$changed"
+
+                # Determine which accounts have changed based on the changed files
+                # ----------------------------------------------------------
+
+                if echo "$changed" | grep -q '^modules/'; then                                          # If any files in the modules directory have changed, then
+                    accounts = $(find accounts -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)   # Get all account names (subdirectories in accounts/) and sort them
+                else
+                  accounts=$(echo "$changed" \                  # Get the changed files, filter for those in accounts/<name>/,
+                    | grep -E '^accounts/[^/]+/' \              # Filter for files in accounts/<name>/ (where <name> is any non-empty string without slashes)
+                    | grep -vE '^accounts/[^/]+/pipeline/' \    # Exclude files in accounts/<name>/pipeline/ (if you want to ignore changes in the pipeline directory)
+                    | cut -d/ -f2 \                             # Extract the account name (the second field when splitting by '/')
+                    | sort -u || true)                          # Sort the account names and remove duplicates. The || true ensures that if no accounts are found, the command doesn't fail.
+                fi
+
+                # If no accounts were affected, set the output to indicate that
+                # ----------------------------------------------------------
+                
+                if [ -z "$accounts" ]; then
+                    echo "any=false" >> "$GITHUB_OUTPUT"
+                    echo "accounts=[]" >> "$GITHUB_OUTPUT"
+                    exit 0                                 
+                fi
+
+                
+
+                matrix=$(echo "$accounts" | jq -R -s -c 'split("\n") | map(select(length > 0)) | map({account: ., account_upper: (. | ascii_upcase)})')
+                
+                # ----------------------------------------------------------
+                # jq    JSON processor, preinstalled on GitHub runners
+                # -R	Raw input — treat stdin as plain text, not JSON
+                # -s	Slurp — read all of stdin as one single string
+                # -c	Compact output — one line, no pretty-printing
+                # -c is required: $GITHUB_OUTPUT is line-based, so a pretty-printed multi-line JSON value would be truncated at the first newline
+
+                # map(...): Loops through every single item in an input array and applies the transformation inside the parentheses to each item.
+                # { ... }:  Creates a brand new JSON object for every item in the loop.
+                # split("\n")                                              - splits on line break, eg result: ["nft", "devops", ""]
+                # map(select(length > 0))                                  - ["nft", "devops"] — drops the empty trailing element
+                # map({account: ., account_upper: (. \| ascii_upcase)})    - [{"account":"nft","account_upper":"NFT"},{"account":"devops","account_upper":"DEVOPS"}]
+                
+                # account: .          : Creates a key named "account". The dot (.) represents the current item from the input array for example: "nft".
+                # account_upper: (...): Creates a key named "account_upper".
+                # (. | ascii_upcase)  : Takes the current item (.), passes it through a pipe (|), and converts all its letters to uppercase using the ascii_upcase filter.
+                # ----------------------------------------------------------
+
+                echo "Affected accounts: $matrix"
+                echo "any=true" >> "$GITHUB_OUTPUT"
+                echo "accounts=$matrix" >> "$GITHUB_OUTPUT"
+    
+    plan:
+        name: plan (${{ matrix.account }})                              # Each parallel job is labelled with its account — plan (nft), plan (devops)
+        needs: detect
+        if: needs.detect.outputs.any == 'true'          
+        runs-on: ubuntu-latest
+        strategy:
+            fail-fast: false                                            # One account's failure does not cancel the others
+            matrix:
+                include: ${{ fromJson(needs.detect.outputs.accounts) }} # Parse the JSON string into a real array. Without it, GitHub sees one long string, not a list.
+        
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Configure AWS credentials (OIDC, read-only plan role)
+              uses: aws-actions/configure-aws-credentials@v4 
+              with: 
+                role-to-assume: ${{ vars[format('AWS_ROLE_ARN_{0}', matrix.account_upper)] }}
+                aws-region: ${{ env.AWS_REGION }}       
+
+            - name: Setup Terraform
+              uses: hashicorp/setup-terraform@v3
+              with:
+                terraform_version: ${{ env.TF_VERSION }}
+                terraform_wrapper: false
+      
+            - name: Install conftest
+              run: |
+                set -euo pipefail
+                cd /tmp
+                curl -sSLO "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz"
+                curl -sSLO "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/checksums.txt"
+                sha256sum --ignore-missing -c checksums.txt
+                tar xzf "conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz" conftest
+                sudo mv conftest /usr/local/bin/conftest
+      
+            - name: terraform fmt (check only)
+              run: terraform fmt -check -recursive -diff
+      
+            - name: terraform init
+              working-directory: accounts/${{ matrix.account }}
+              run: terraform init -input=false -lockfile=readonly
+      
+            - name: terraform validate
+              working-directory: accounts/${{ matrix.account }}
+              run: terraform validate
+      
+            - name: terraform plan
+              working-directory: accounts/${{ matrix.account }}
+              run: terraform plan -input=false -lock-timeout=5m -out=tfplan.binary
+      
+            - name: terraform show (JSON, for the OPA gate only)
+              working-directory: accounts/${{ matrix.account }}
+              run: terraform show -json tfplan.binary > tfplan.json
+      
+            - name: OPA gate — required tags (Name, Environment, Application)
+              working-directory: accounts/${{ matrix.account }}
+              run: conftest test --policy ../../policy tfplan.json
+      
+            - name: Clean up unredacted plan output
+              if: always()
+              working-directory: accounts/${{ matrix.account }}
+              run: rm -f tfplan.json tfplan.binary
+                

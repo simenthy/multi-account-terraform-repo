@@ -1,0 +1,202 @@
+name: terraform-apply (accounts/*)
+
+# Manual only — never runs on push/PR. Pick which accounts/<name> root to
+# apply via the "account" input. Plans first using that account's read-only
+# role, posts the plan to the run's summary, then pauses at the "apply" job
+# for the <account>-apply GitHub Environment's required reviewers. Only
+# once approved does it apply — and it applies the EXACT saved plan from
+# the first job, not a fresh one.
+#
+# Does NOT support applying an accounts/<name>/pipeline/ root — those stay
+# a manual local `terraform apply`, same as always (CLAUDE.md §1).
+
+on:
+  workflow_dispatch:
+    inputs:
+      account:
+        description: "Account to apply — must match a directory directly under accounts/ (e.g. nft, devops)"
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+  actions: write # lets the apply job delete the saved-plan artifact once it's used
+
+concurrency:
+  group: terraform-apply-${{ inputs.account }}
+  cancel-in-progress: false # never cancel an apply mid-flight
+
+env:
+  TF_VERSION: "1.15.8"
+  CONFTEST_VERSION: "0.69.0"
+  AWS_REGION: "us-east-1"
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  validate-input:
+    name: validate account input
+    runs-on: ubuntu-latest
+    outputs:
+      account_upper: ${{ steps.check.outputs.account_upper }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Confirm accounts/<account> is a real, non-pipeline root
+        id: check
+        run: |
+          set -euo pipefail
+          account="${{ inputs.account }}"
+          if [[ "$account" == *"/"* ]] || [ "$account" = "pipeline" ] || \
+             [ ! -d "accounts/$account" ] || [ ! -f "accounts/$account/backend.tf" ]; then
+            echo "::error::'$account' is not a valid accounts/<name> root — it must be a direct subdirectory of accounts/ with its own backend.tf (not accounts/<name>/pipeline)."
+            exit 1
+          fi
+          echo "account_upper=$(echo "$account" | tr '[:lower:]' '[:upper:]')" >> "$GITHUB_OUTPUT"
+
+  plan:
+    name: plan (for review)
+    needs: validate-input
+    runs-on: ubuntu-latest
+    outputs:
+      has-changes: ${{ steps.plan.outputs.exitcode == '2' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC, read-only plan role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars[format('AWS_ROLE_ARN_{0}', needs.validate-input.outputs.account_upper)] }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install conftest
+        run: |
+          set -euo pipefail
+          cd /tmp
+          curl -sSLO "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz"
+          curl -sSLO "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/checksums.txt"
+          sha256sum --ignore-missing -c checksums.txt
+          tar xzf "conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz" conftest
+          sudo mv conftest /usr/local/bin/conftest
+
+      - name: terraform fmt (check only)
+        run: terraform fmt -check -recursive -diff
+
+      - name: terraform init
+        working-directory: accounts/${{ inputs.account }}
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: terraform validate
+        working-directory: accounts/${{ inputs.account }}
+        run: terraform validate
+
+      - name: terraform plan
+        id: plan
+        working-directory: accounts/${{ inputs.account }}
+        run: |
+          set +e
+          terraform plan -input=false -lock-timeout=5m -detailed-exitcode -out=tfplan.binary
+          code=$?
+          set -e
+          echo "exitcode=$code" >> "$GITHUB_OUTPUT"
+          # 0 = no changes, 1 = real error, 2 = changes present (not a failure)
+          if [ "$code" -eq 1 ]; then
+            exit 1
+          fi
+          exit 0
+
+      - name: terraform show (JSON, for the OPA gate only)
+        working-directory: accounts/${{ inputs.account }}
+        run: terraform show -json tfplan.binary > tfplan.json
+
+      - name: OPA gate — required tags (Name, Environment, Application)
+        working-directory: accounts/${{ inputs.account }}
+        run: conftest test --policy ../../policy tfplan.json
+
+      - name: Render human-readable plan
+        working-directory: accounts/${{ inputs.account }}
+        run: terraform show -no-color tfplan.binary > tfplan.txt
+
+      - name: Post plan to job summary
+        working-directory: accounts/${{ inputs.account }}
+        run: |
+          {
+            echo "## Terraform plan for accounts/${{ inputs.account }} — review before approving apply"
+            echo '```'
+            cat tfplan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Clean up unredacted plan JSON
+        if: always()
+        working-directory: accounts/${{ inputs.account }}
+        run: rm -f tfplan.json
+
+      - name: Upload saved plan for the apply job
+        if: steps.plan.outputs.exitcode == '2'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-binary-${{ inputs.account }}
+          path: accounts/${{ inputs.account }}/tfplan.binary
+          retention-days: 1
+
+  apply:
+    name: apply (requires approval)
+    needs: [validate-input, plan]
+    if: needs.plan.outputs.has-changes == 'true'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.account }}-apply # <- pauses here for that account's required reviewers
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC, apply role — environment-gated)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars[format('AWS_APPLY_ROLE_ARN_{0}', needs.validate-input.outputs.account_upper)] }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform init
+        working-directory: accounts/${{ inputs.account }}
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: Download the reviewed plan
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-binary-${{ inputs.account }}
+          path: accounts/${{ inputs.account }}
+
+      - name: terraform apply (the exact plan that was reviewed)
+        working-directory: accounts/${{ inputs.account }}
+        run: terraform apply -input=false -lock-timeout=5m tfplan.binary
+
+      - name: Clean up saved plan
+        if: always()
+        working-directory: accounts/${{ inputs.account }}
+        run: rm -f tfplan.binary
+
+      - name: Delete the plan artifact
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          artifact_id=$(gh api --paginate "repos/${{ github.repository }}/actions/artifacts" \
+            --jq ".artifacts[] | select(.name == \"tfplan-binary-${{ inputs.account }}\" and .workflow_run.id == ${{ github.run_id }}) | .id" | head -n1)
+          if [ -n "$artifact_id" ]; then
+            gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$artifact_id"
+          fi

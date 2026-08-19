@@ -1,0 +1,2 @@
+output "github_actions_plan_role_arns" { value = { for k, v in aws_iam_role.github_actions_plan : k => v.arn } }
+output "github_actions_apply_role_arns" { value = { for k, v in aws_iam_role.github_actions_apply : k => v.arn } }

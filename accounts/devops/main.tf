@@ -114,3 +114,12 @@ module "observability" {
   event_patterns = var.event_patterns
   metric_alarms  = var.metric_alarms
 }
+
+module "pipeline" {
+  source      = "../../../modules/pipeline"
+  common_tags = var.common_tags
+
+  github_oidc_provider       = var.github_oidc_provider
+  github_actions_plan_roles  = var.github_actions_plan_roles
+  github_actions_apply_roles = var.github_actions_apply_roles
+}

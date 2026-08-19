@@ -685,3 +685,38 @@ variable "metric_alarms" {
   }))
   default = {}
 }
+
+# ---------------------------------------------------------------------------
+# Pipeline
+# ---------------------------------------------------------------------------
+
+
+variable "github_oidc_provider" {
+  description = "GitHub Actions OIDC identity provider for this account. null = don't create one."
+  type = object({
+    tags = optional(map(string), {})
+  })
+  default = null
+}
+
+variable "github_actions_plan_roles" {
+  description = "IAM roles GitHub Actions plan workflows can assume via OIDC (read-only), keyed by local role name."
+  type = map(object({
+    repo           = string
+    default_branch = optional(string, "main")
+    state_bucket   = string
+    state_key      = string
+    tags           = optional(map(string), {})
+  }))
+  default = {}
+}
+
+variable "github_actions_apply_roles" {
+  description = "IAM roles GitHub Actions apply workflows can assume via OIDC (environment-gated), keyed by local role name."
+  type = map(object({
+    repo               = string
+    github_environment = string
+    tags               = optional(map(string), {})
+  }))
+  default = {}
+}
