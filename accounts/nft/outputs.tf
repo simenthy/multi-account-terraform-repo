@@ -108,3 +108,12 @@ output "event_rule_arns" {
   description = "EventBridge rule ARNs, keyed by local name."
   value       = module.observability.event_rule_arns
 }
+
+output "github_actions_plan_role_arns" {
+  value       = module.pipeline.github_actions_plan_role_arns
+}
+
+output "github_actions_apply_role_arns" {
+  value       = module.pipeline.github_actions_apply_role_arns
+}
+

@@ -15,6 +15,7 @@
 launch_templates = {
   nft_lt01 = {
     name                = "fra-nft-lt-nft01"
+    image_id            = "ami-0332d564d76dbd8d6"
     instance_type       = "t3.micro"
     security_group_keys = ["sg_nft_default"]
     tags = {

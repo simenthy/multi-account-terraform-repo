@@ -14,7 +14,7 @@ variable "common_tags" {
 variable github_oidc_provider {
   description = "GitHub Actions OIDC Provider for this account. null = don't create one. Only one is needeed per account, no matter how many roles trust it."
   type        = object({
-    tags = optional(map(string, {}))
+    tags                      = optional(map(string), {})
   })
   default = null
 }
@@ -51,7 +51,7 @@ variable "github_actions_apply_roles" {
   type = map(object({
     repo = string
     github_environment = string          # eg: nft-plan or nft-apply
-    tags = optional(map(string, {}))
+    tags                      = optional(map(string), {})
   }))
   default = {}
 }

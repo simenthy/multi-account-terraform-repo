@@ -25,7 +25,7 @@ variable "launch_templates" {
   description = "Map of launch templates, keyed by local name. Cross-domain fields (vpc_security_group_ids, iam_instance_profile_arn) are resolved by the root before reaching the module."
   type = map(object({
     name                    = string
-    image_id                = optional(string)
+    image_id                = string
     instance_type           = optional(string)
     key_name                = optional(string)
     description             = optional(string)
