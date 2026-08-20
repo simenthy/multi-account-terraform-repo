@@ -148,8 +148,8 @@ s3_buckets = {
       Application = "NFT"
     }
   }
-    nft_artifacts_bucket01 = {
-    bucket = "star-alliance-artifacts-nft01-873135413574"
+  nft_artifacts_bucket01 = {
+    bucket = "artifacts-nft-873135413574"
     tags = {
       Name        = "star-alliance-terraform-nft"
       Environment = "Dev"

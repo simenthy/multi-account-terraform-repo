@@ -4,7 +4,7 @@ resource "aws_iam_openid_connect_provider" "github_actions" {
   count = var.github_oidc_provider != null ? 1 : 0
 
   url            = "https://token.actions.githubusercontent.com"
-  client_id_list = ["sts.amazonaws.com"]    
+  client_id_list = ["sts.amazonaws.com"]
 
   tags = merge(var.common_tags, var.github_oidc_provider.tags)
 }
@@ -19,8 +19,8 @@ data "aws_iam_openid_connect_provider" "existing" {
 # Assign the OIDC provider ARN to a local variable, whether it was created or already existed
 
 locals {
-  github_oidc_provider_arn = coalesce(                           # coalesce() returns the first non-null value in the list
-    one(aws_iam_openid_connect_provider.github_actions[*].arn),  # one(...)	Collapses a 0-or-1 element list into either that single value or null. Errors if given 2+ elements
+  github_oidc_provider_arn = coalesce(                          # coalesce() returns the first non-null value in the list
+    one(aws_iam_openid_connect_provider.github_actions[*].arn), # one(...)	Collapses a 0-or-1 element list into either that single value or null. Errors if given 2+ elements
     one(data.aws_iam_openid_connect_provider.existing[*].arn),
   )
 }
